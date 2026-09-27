@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {attachedPoint,defaults,bodyPoint} from '../web/parent-motion.js';
+const part={id:'neck',role:'neck',image:'neck.png',rect:[0,0,1,1]};
+const g={cols:49,rows:73,values:Array(49*73).fill(.8),image:part.image,rect:part.rect,sourceArray:'points.npy'};
+const p={size:[1024,1536],depth:{arrays:{'points.npy':'points.npy'}},parentMotion:{...defaults,bodySurfaces:{neck:g}}};
+const q=[.5,.32,0],state={x:10,y:5,z:0};
+assert.deepEqual(attachedPoint(p,part,q,{}, {x:0,y:0,z:0}).slice(0,2),q.slice(0,2));
+const zero={...p,parentMotion:{...p.parentMotion,neckRelief:0}};
+assert.deepEqual(attachedPoint(zero,part,q,{},state).slice(0,2),bodyPoint(p,q,state));
+const a=attachedPoint(p,part,q,{},state);
+assert.notDeepEqual(a.slice(0,2),bodyPoint(p,q,state));
+assert.deepEqual(a,attachedPoint({...p,parentMotion:{...p.parentMotion,bodyRelief:3}},part,q,{},state));
+assert.deepEqual(attachedPoint(p,{...part,image:'changed.png'},q,{},state).slice(0,2),bodyPoint(p,q,state));
+console.log('Body neutral alignment, zero relief, independent neck control and stale-depth fallback passed');

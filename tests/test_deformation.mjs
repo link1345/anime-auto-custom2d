@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import {boneMatrices,deformedVertices} from '../web/deformation.js';
+const p={rig:{bones:[{name:'root',parent:-1,position:[.5,.5,0]},{name:'shoulderLeft',parent:0,position:[.3,.3,0]},{name:'elbowLeft',parent:1,position:[.3,.5,0]},{name:'wristLeft',parent:2,position:[.3,.7,0]}]}};
+const part={role:'armLeft',mesh:{vertices:[[.3,.7,0]],joints:[[2,0,0,0]],weights:[[1,0,0,0]],morphs:{smile:[[.01,0,0]]}}};
+const rest=deformedVertices(part,p,{values:{},strength:0},boneMatrices(p,{}))[0];
+assert.ok(Math.abs(rest[0]-.3)<1e-8&&Math.abs(rest[1]-.7)<1e-8);
+const bent=deformedVertices(part,p,{values:{elbowLeft:90},strength:0},boneMatrices(p,{elbowLeft:90}))[0];
+assert.ok(Math.abs(bent[0]-.1)<1e-8&&Math.abs(bent[1]-.5)<1e-8);
+console.log('Rest pose and elbow skin deformation passed');
+import {headMatrix,isHeadPart} from '../web/deformation.js';
+const faceProject={size:[1024,1536],face:{leftEye:[.44,.19],rightEye:[.56,.19]},landmarks:{joints:{neck:{position:[.5,.315]}}}};
+const pose={headX:20,headY:15,headZ:12};
+const apply=(m,[x,y])=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
+for(const values of [{},pose,{headX:-20,headY:-15,headZ:-12}]){
+ const m=headMatrix(faceProject,values);
+ const samples=[];
+ for(const [tag,z] of [['face',-.1],['eyelash',.1],['irides',.9]]){
+  const part={role:'head',scope:'face',tag,mesh:{vertices:[[.44,.19,z]],joints:[[0,0,0,0]],weights:[[1,0,0,0]]}};
+  const vertex=deformedVertices(part,faceProject,{values},[[2,0,0,2,10,10]])[0];
+  samples.push(apply(m,vertex));
+ }
+ assert.deepEqual(samples[0],samples[1]);assert.deepEqual(samples[1],samples[2]);
+ // Shared affine mapping is identical across different triangulations.
+ const a=[.4,.15],b=[.6,.22],mid=a.map((v,i)=>(v+b[i])/2);
+ const transformed=apply(m,mid),aa=apply(m,a),bb=apply(m,b);
+ transformed.forEach((v,i)=>assert.ok(Math.abs(v-(aa[i]+bb[i])/2)<1e-10));
+}
+assert.deepEqual(apply(headMatrix(faceProject,{}),[.4,.2]),[.4,.2]);
+const hair={id:'hair',role:'hairFront',pivot:[.5,.05],physics:{enabled:true},mesh:{vertices:[[.4,.05,0],[.4,.15,0],[.4,.4,0]]}};
+const bentHair=deformedVertices(hair,faceProject,{values:pose,hair:{hair:.06}},null);
+assert.deepEqual(bentHair[0],hair.mesh.vertices[0]);assert.deepEqual(bentHair[1],hair.mesh.vertices[1]);assert.notDeepEqual(bentHair[2],hair.mesh.vertices[2]);
+assert.equal(isHeadPart({role:'face:mouth',scope:'face'}),true);
+console.log('Shared face transform, depth independence, no double skinning and fixed hair roots passed');
+import {surfaceMesh} from '../web/deformation.js';
+const surface={cols:3,rows:3,depth:[2,2,2,2,1.8,2,2,2,2],pivot:[.5,.5,2],intrinsics:[[1,0,.5],[0,1,.5],[0,0,1]],strength:1,maxAngle:15};
+const neutral=surfaceMesh(surface,{});
+neutral.vertices.forEach((v,i)=>v.slice(0,2).forEach((n,k)=>assert.ok(Math.abs(n-neutral.uv[i][k])<1e-10)));
+const turned=surfaceMesh(surface,{headX:15});
+assert.ok(turned.vertices[4][0]>.51,'positive headX turns the protruding nose screen-right');
+assert.ok(surfaceMesh(surface,{headX:-15}).vertices[4][0]<.49,'negative headX turns screen-left');
+assert.ok(turned.vertices.every(v=>v.every(Number.isFinite)));
+assert.deepEqual(turned,surfaceMesh(surface,{headX:90}));
+assert.ok(Math.abs(surfaceMesh({...surface,strength:0},{headX:15}).vertices[4][0]-.5)<1e-10);
+console.log('Shared camera surface: neutral identity, depth-dependent rotation and angle bounds passed');
+import {directionalMesh} from '../web/deformation.js';
+const entry={fitted:true,cols:49,rows:73,angle:18,offsets:Array.from({length:49*73},()=>[.03,.01])};
+const dp={size:[1024,1536],directionalFace:{enabled:true,views:{right:entry}}};
+const d0=directionalMesh(dp,{headX:0}),d1=directionalMesh(dp,{headX:18}),dm=directionalMesh(dp,{headX:9}),dn=directionalMesh(dp,{headX:-18});
+assert.ok(Math.abs(d1.vertices[0][0]-.03)<1e-10);assert.ok(Math.abs(dm.vertices[0][0]-.015)<1e-10);
+assert.deepEqual(d0.vertices,dn.vertices);assert.deepEqual(d1,directionalMesh(dp,{headX:25}));
+assert.equal(directionalMesh({...dp,directionalFace:{enabled:false}},{}),null);
+console.log('Directional reference endpoint, smooth blend, clamping and unregistered-side behavior passed');
+import {multiviewMesh} from '../web/deformation.js';
+const mv={enabled:true,cols:3,rows:3,depth:Array(9).fill(2),intrinsics:[[1,0,.5],[0,1,.5],[0,0,1]],views:{right:{rotation:[[1,0,0],[0,1,0],[0,0,1]],scale:1,translation:[.1,0,0],intrinsics:[[1,0,.5],[0,1,.5],[0,0,1]],angle:18,residualOffsets:Array.from({length:9},()=>[.01,0]),correctionGain:1}}};
+const mp={size:[1024,1536],multiViewFace:mv};
+const m0=multiviewMesh(mp,{}),m1=multiviewMesh(mp,{headX:18});
+m0.vertices.forEach((v,i)=>v.slice(0,2).forEach((x,k)=>assert.ok(Math.abs(x-m0.uv[i][k])<1e-10)));
+assert.ok(Math.abs(m1.vertices[4][0]-.56)<1e-10);assert.deepEqual(m1,multiviewMesh(mp,{headX:40}));
+const fallbackProject={...mp,multiViewFace:{...mv,...surface,views:mv.views}};
+assert.ok(multiviewMesh(fallbackProject,{headX:-15}).vertices[4][0]<.49,'missing left reference still follows a leftward cursor');
+console.log('Registered multiview neutral identity and camera-plus-residual projection passed');

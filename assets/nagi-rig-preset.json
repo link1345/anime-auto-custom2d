@@ -1,0 +1,10 @@
+{
+  "description": "Nagi原画を目視して配置したデモ専用の手動関節。自動推定結果ではない。Left/Rightは画面側。",
+  "joints": {
+    "root": [0.5, 0.65], "neck": [0.5, 0.32], "head": [0.5, 0.21],
+    "shoulderLeft": [0.28, 0.36], "elbowLeft": [0.215, 0.61],
+    "wristLeft": [0.12, 0.84], "handLeft": [0.055, 0.925],
+    "shoulderRight": [0.72, 0.36], "elbowRight": [0.785, 0.61],
+    "wristRight": [0.88, 0.84], "handRight": [0.945, 0.925]
+  }
+}

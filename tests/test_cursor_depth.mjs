@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {defaults,cursorTargetDepth,cursorAngles} from '../web/parent-motion.js';
+const p={size:[1024,1536],face:{leftEye:[.4,.2],rightEye:[.6,.2]},parentMotion:{...defaults,cursorMode:1,cursorDepthFollow:1}};
+const D=1+4*defaults.cameraDistance;
+const depths=[0,.1,.2,.4,1,100].map(x=>cursorTargetDepth(p,[.5+x,.2]));
+assert.ok(depths.every((z,i)=>z< D&&(!i||z>=depths[i-1])));
+assert.equal(depths[0],D*(.2+.6*defaults.targetDepth));
+assert.equal(depths.at(-1),D*.9);
+assert.equal(cursorTargetDepth(p,[.3,.2]),cursorTargetDepth(p,[.7,.2]));
+const fixed={...p,parentMotion:{...p.parentMotion,cursorDepthFollow:0}};
+assert.equal(cursorTargetDepth(fixed,[100,100]),depths[0]);
+for(const camera of [0,1,2])assert.ok(Object.values(cursorAngles({...p,parentMotion:{...p.parentMotion,camera}},[100,100])).every(Number.isFinite));
+console.log('Cursor depth monotonicity, symmetry, center, upper bound and fixed mode passed');

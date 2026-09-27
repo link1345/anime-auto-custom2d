@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {cursorGaze,irisOffset,defaults} from '../web/parent-motion.js';
+const p={face:{leftEye:[.4,.2],rightEye:[.6,.2]}};
+assert.deepEqual(cursorGaze(p,[.5,.2]),{gazeX:0,gazeY:0});
+assert.equal(cursorGaze(p,[9,-9]).gazeX,1);assert.equal(cursorGaze(p,[9,-9]).gazeY,-1);
+const eye={bbox:[.2,.3,.4,.4]};
+assert.deepEqual(irisOffset(eye,{...defaults,gazeEnabled:0},{gazeX:1,gazeY:1}),[0,0]);
+assert.deepEqual(irisOffset(eye,{...defaults,gazeRangeX:0,gazeRangeY:0},{gazeX:1,gazeY:1}),[0,0]);
+const q=irisOffset(eye,{...defaults,gazeRangeX:1,gazeRangeY:1},{gazeX:99,gazeY:99});assert.ok(Math.abs(q[0]-.1)<1e-12&&Math.abs(q[1]-.05)<1e-12);
+console.log('Gaze direction, center, enable switch, independent zero ranges and bounds passed');

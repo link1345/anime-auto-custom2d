@@ -1,0 +1,6 @@
+# Nagi shallow right view
+
+Tool: built-in image_gen. Reference: current Nagi face input (2160 square). Output kept as nagi-right-original.png; FFmpeg Lanczos enlarged to nagi-right-2160.png, preserving alpha. Upscaling does not reconstruct missing detail. Target angle is an artistic approximation, not a calibrated camera measurement.
+
+Prompt:
+Edit the reference into a SINGLE identity-preserving anime face reference for a 2D character rig. Same Nagi girl, teal wavy shoulder length hair with the exact asymmetrical bangs, golden eyes, delicate linework, colors and soft shading. Turn her head only about 18 degrees toward the viewer's RIGHT (nose points slightly right). A SHALLOW oblique view, NOT profile, NOT a strong three-quarter turn. Both open eyes fully visible, far eye subtly narrower, anime artist-designed cheek/chin/nose contours, mouth closed with same gentle neutral smile. No head tilt, no pitch. Keep original face scale and framing: face fills square canvas, crown at upper edge, chin about 81% down, neck visible to bottom. Same lighting. Transparent background, clean alpha, no stray colored edge specks. No clothes additions, jewelry, text, grid or second face. Render square at least 2160x2160 if supported. This image is the angle target; do not simply distort or mirror the front view.
