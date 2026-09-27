@@ -1,7 +1,7 @@
-import {Renderer,connect} from './renderer.js?v=perfgrid1';
-import {createSegmentationUI} from './segmentation.js';
-import {createCharacterUI} from './character.js?v=perfgrid1';
-import {cursorAngles,cursorGaze} from './parent-motion.js?v=perfgrid1';
+import {Renderer,connect} from './renderer.js?v=morphpin1';
+import {createSegmentationUI} from './segmentation.js?v=morphpin1';
+import {createCharacterUI} from './character.js?v=morphpin1';
+import {cursorAngles,cursorGaze} from './parent-motion.js?v=morphpin1';
 
 const $=id=>document.getElementById(id);
 const renderer=new Renderer($('avatar'));

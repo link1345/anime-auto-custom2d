@@ -29,8 +29,30 @@ export function boneMatrices(project,values){
   return world.map((m,i)=>{const [x,y]=bones[i].position;return [...m.slice(0,4),m[4]-m[0]*x-m[2]*y,m[5]-m[1]*x-m[3]*y];});
 }
 
+export function expressionMatchesPart(e,part){
+ if(e.tag)return e.tag===part.tag;
+ if(e.target==='mouth')return part.tag==='mouth';
+ if(e.target==='eyes')return ['eyelash','eyewhite','irides'].includes(part.tag);
+ if(e.target==='brows')return part.tag==='eyebrow';
+ return true;
+}
+// Shape interpolation is independent of the short texture handoff near closure.
+export function morphTextureWeight(expression,strength){
+ const t=Math.max(0,Math.min(1,strength||0));
+ const smooth=(x,a,b)=>{const v=Math.max(0,Math.min(1,(x-a)/(b-a)));return v*v*(3-2*v);};
+ if(expression?.driver==='blink')return smooth(t,.8,1);
+ if(expression?.driver==='mouth')return smooth(t,0,.2);
+ return t;
+}
+export function drivenExpression(project,part,frame){
+ const e=project.expressions.find(e=>!e.stale&&e.fit?.partId===part.id&&expressionMatchesPart(e,part)&&['blink','mouth'].includes(e.driver));
+ if(!e)return null;
+ const strength=Math.max(0,Math.min(1,e.driver==='blink'?1-(frame.values.eyeOpen??1):(frame.values.mouthOpen??0)));
+ return {expression:e,strength};
+}
 export function deformedVertices(part,project,frame,matrices){
-  const mesh=part.mesh,morph=mesh.morphs?.[frame.expressionId],strength=frame.strength||0;
+  const mesh=part.mesh,expression=project.expressions?.find(e=>e.id===frame.expressionId);
+  const morph=expression&&(!expression.stale)&&expressionMatchesPart(expression,part)&&(!expression.fit||expression.fit.partId===part.id)?mesh.morphs?.[frame.expressionId]:undefined,strength=frame.strength||0;
   const head=isHeadPart(part),hair=part.role.startsWith('hair')&&part.physics?.enabled;
   const ys=hair?mesh.vertices.map(v=>v[1]):[0,1],top=Math.min(...ys),bottom=Math.max(...ys);
   const eyeY=project.face?((project.face.leftEye[1]+project.face.rightEye[1])/2):top+(bottom-top)*.4;
@@ -171,4 +193,14 @@ export function multiviewMesh(project,values){
     if(i<cols-1&&j<rows-1)triangles.push([n,n+1,n+cols],[n+1,n+cols+1,n+cols]);
   }
   return {vertices,uv,triangles};
+}
+
+// Warp the original eye aperture with the exact same pinned morph as the lashes.
+export function blinkMaskGeometry(project,open){
+ const part=project.parts.find(p=>p.visible!==false&&p.tag==='eyelash'&&drivenExpression(project,p,{values:{eyeOpen:open}}));
+ if(!part||!project.eyeMask)return null;
+ const driven=drivenExpression(project,part,{values:{eyeOpen:open}}),r=project.eyeMask.rect;
+ const local=q=>[(q[0]-r[0])/r[2],(q[1]-r[1])/r[3]];
+ return {expression:driven.expression,part,vertices:deformedVertices(part,project,{values:{},expressionId:driven.expression.id,strength:driven.strength},null).map(local),
+ triangles:part.mesh.triangles,uv:part.mesh.vertices.map(local)};
 }

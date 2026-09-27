@@ -13,6 +13,7 @@ from PIL import Image
 from scripts.run_face_job import FACE_TAGS, BODY_TAGS, REPO_COMMIT
 from .pipeline import image_from_bytes, mesh_for
 from .project import uid, safe_id, validate
+from .expression_registry import upsert_named
 
 FACE_ORDER = ["ears", "face", "eyewhite", "irides", "nose", "mouth", "eyebrow", "eyelash"]
 BODY_ORDER = ["back hair", "legwear", "footwear", "neck", "topwear", "bottomwear", "handwear", "front hair"]
@@ -29,7 +30,13 @@ def rectangle(value):
     return value
 
 
-def make_job(store,project,scope,settings=None):
+def make_job(store,project,scope,settings=None,expression_id=None):
+    source=None
+    if expression_id:
+        source=next((e for e in project.get('expressionSources',[]) if e['id']==expression_id),None)
+        if not source:raise ValueError('Unknown expression source')
+        project=copy.deepcopy(project);project['faceInput']={'image':source['image'],'validation':source['validation'],'alignment':{'rect':source['rect']}}
+        scope='face'
     if scope not in ("face","body"):raise ValueError("Invalid segmentation scope")
     if scope=="face" and not project.get("faceInput"):raise ValueError("顔素材を先に登録してください")
     path=project["faceInput"]["image"] if scope=="face" else project["source"]
@@ -41,6 +48,7 @@ def make_job(store,project,scope,settings=None):
          "scope":scope,"backend":"see-through","input":"input.png","sourceAsset":path,
          "inputSha256":hashlib.sha256(payload).hexdigest(),"settings":settings,"repoCommit":REPO_COMMIT,
          "allowedTags":list(FACE_TAGS if scope=="face" else BODY_TAGS)}
+    if source:job.update(expressionSourceId=source['id'],allowedTags=source['tags'])
     if scope=="face":job["validation"]=project["faceInput"]["validation"]
     folder=store.folder(project["id"])/"jobs";folder.mkdir(exist_ok=True)
     (folder/f"{job['id']}.json").write_text(json.dumps(job),"utf-8")
@@ -95,7 +103,9 @@ def import_result(store,project,payload):
         job=json.loads(job_path.read_text("utf-8"));scope=job["scope"]
         if metadata.get("schemaVersion")!=1 or metadata.get("status")!="success" or metadata.get("backend")!="see-through" or metadata.get("projectId")!=project["id"] or metadata.get("scope")!=scope or metadata.get("inputSha256")!=job["inputSha256"]:
             raise ValueError("結果と入力ジョブの対応が不正です")
-        current_path=project.get("faceInput",{}).get("image") if scope=="face" else project["source"]
+        expression_source=next((e for e in project.get('expressionSources',[]) if e['id']==job.get('expressionSourceId')),None)
+        if job.get('expressionSourceId') and not expression_source:raise ValueError('Expression source removed')
+        current_path=expression_source['image'] if expression_source else (project.get("faceInput",{}).get("image") if scope=="face" else project["source"])
         if current_path!=job["sourceAsset"] or hashlib.sha256((folder/current_path).read_bytes()).hexdigest()!=job["inputSha256"]:
             raise ValueError("入力素材が差し替えられています。新しいジョブを出力してください")
         allowed=FACE_TAGS if scope=="face" else BODY_TAGS
@@ -105,7 +115,7 @@ def import_result(store,project,payload):
         source=image_from_bytes((folder/current_path).read_bytes())
         for item in layers:
             tag=item["tag"]
-            if tag not in allowed or tag in seen:raise ValueError("対象外または重複したレイヤーです")
+            if tag not in allowed or tag not in job.get("allowedTags",allowed) or tag in seen:raise ValueError("対象外または重複したレイヤーです")
             seen.add(tag);data=z.read(item["image"])
             if hashlib.sha256(data).hexdigest()!=item["sha256"]:raise ValueError("レイヤーのハッシュが一致しません")
             im=image_from_bytes(data)
@@ -113,11 +123,19 @@ def import_result(store,project,payload):
             bbox=im.getchannel("A").getbbox()
             if not bbox:raise ValueError("透明のみのレイヤーはmissingとして扱ってください")
             decoded.append((tag,im,bbox))
-        rect=rectangle(project["faceInput"]["alignment"]["rect"]) if scope=="face" else [0,0,1,1]
+        rect=rectangle(expression_source["rect"]) if expression_source else (rectangle(project["faceInput"]["alignment"]["rect"]) if scope=="face" else [0,0,1,1])
         parts=[]
         for tag,im,bbox in decoded:
             name=f"assets/st-{uid()}.png";im.save(folder/name)
             parts.append(make_part(tag,allowed[tag],name,scope,rect,bbox,im.size,job["id"]))
+    if expression_source:
+        updated=copy.deepcopy(project)
+        for part in parts:
+            upsert_named(updated,'expressions',{'id':uid(),'name':expression_source['name']+' / '+part['tag'],'target':'mouth' if part['tag']=='mouth' else 'eyes' if part['tag'] in ('eyelash','irides','eyewhite') else 'face','image':part['image'],'rect':expression_source['rect'],'source':'see-through','sourceId':expression_source['id'],'tag':part['tag'],'meshVersion':project['meshVersion'],'stale':False,'method':'crossfade','status':'adopted'})
+        candidate={'id':uid(),'projectId':project['id'],'baseRevision':project['revision'],'backend':'see-through','scope':'expression','project':validate(updated),'parts':[], 'warnings':['未検出: '+tag for tag in job['allowedTags'] if tag not in seen]}
+        candidate_folder=folder/'candidates';candidate_folder.mkdir(exist_ok=True)
+        (candidate_folder/(candidate['id']+'.json')).write_text(json.dumps(candidate,ensure_ascii=False),'utf-8')
+        return candidate
     updated=preview_project(project,parts)
     if updated.get('rig'):updated['rig']['stale']=True
     if scope=="face":

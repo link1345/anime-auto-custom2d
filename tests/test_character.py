@@ -29,6 +29,32 @@ class CharacterTests(unittest.TestCase):
         raw=io.BytesIO();image.save(raw,'PNG');self.p=create_project(self.store,raw.getvalue())
         for name,position in POSITIONS.items():self.p=manual_joint(self.p,name,position)
 
+    def test_face_alignment_reused_for_manual_correspondence(self):
+        p=self.p;part=p['parts'][3];part['rect']=[.2,.1,.5,.4]
+        p['faceInput']={'alignment':{'rect':part['rect']}}
+        p['expressions']=[{'id':'target','image':part['image'],'rect':[0,0,1,1]}]
+        a=[[.2,.2],[.8,.2],[.8,.8],[.2,.8]]
+        fitted=fit_expression(self.store,p,'target',part['id'],a,a,True)
+        np.testing.assert_allclose(fitted['parts'][3]['mesh']['morphs']['target'],0,atol=1e-12)
+        self.assertEqual(fitted['expressions'][0]['rect'],part['rect'])
+        self.assertEqual(p['expressions'][0]['rect'],[0,0,1,1])
+        with self.assertRaises(ValueError):fit_expression(self.store,p,'target',part['id'],a,None)
+
+    def test_pins_on_edges_and_inside_preserve_depth_and_skin(self):
+        from src.character import insert_control_vertices,displacement
+        part={'id':'test','mesh':{'vertices':[[0,0,0],[1,0,1],[1,1,2],[0,1,1]],'triangles':[[0,1,2],[0,2,3]],'weights':[[1,0,0,0]]*4,'joints':[[0,0,0,0]]*4,'morphs':{'old':[[0,0,0]]*4}}}
+        p={'expressions':[{'fit':{'partId':'test','uv':[[0,0],[1,0],[1,1],[0,1]]}}]}
+        a=np.array([[.5,.5],[.7,.3],[.3,.7],[.2,.2]])
+        insert_control_vertices(p,part,a);m=part['mesh'];v=np.array(m['vertices'])
+        self.assertEqual(len(v),8);np.testing.assert_allclose(v[:,2],v[:,0]+v[:,1])
+        self.assertEqual(len(m['weights']),8);self.assertEqual(len(m['morphs']['old']),8);self.assertEqual(len(p['expressions'][0]['fit']['uv']),8)
+        b=a+np.array([[0,.01],[0,.02],[0,-.02],[0,-.01]])
+        delta=displacement(v,a,b)
+        for source,target in zip(a,b):
+            i=np.argmin(np.linalg.norm(v[:,:2]-source,axis=1));np.testing.assert_allclose(v[i,:2]+delta[i],target,atol=1e-10)
+        for tri in m['triangles']:
+            x,y,z=v[tri,:2];self.assertGreater(np.linalg.det(np.stack([y-x,z-x])),0)
+
     def test_rig_hierarchy_and_normalized_weights(self):
         p=build_rig(self.p);validate(p)
         self.assertEqual(len(p['rig']['bones']),11)

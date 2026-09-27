@@ -1,0 +1,18 @@
+export function pointFromCanvas(x,y,rect){return [rect[0]+x*rect[2],rect[1]+y*rect[3]];}
+export function createPointEditor({renderer,getItems,onApply}){
+ const dialog=document.createElement('dialog');dialog.style.width='min(920px,95vw)';
+ dialog.innerHTML=`<h2>対応する場所をクリック</h2><p>左右の画像に同じ順番で点を置きます。例：口の左端 → 右端 → 上中央 → 下中央。目も目頭・目尻・上・下の順に。最低3組、できれば4組以上。点はドラッグで修正できます。</p><div style="display:flex;gap:12px;flex-wrap:wrap"><div>元パーツ<canvas width="400" height="400" style="width:min(400px,38vw);touch-action:none;background:#25323c"></canvas></div><div>見本画像<canvas width="400" height="400" style="width:min(400px,38vw);touch-action:none;background:#25323c"></canvas></div></div><p data-status></p><button data-copy>元の点を見本へコピー</button><button data-undo>最後の点を戻す</button><button data-clear>全点クリア</button><button data-apply>対応点を使う</button><button data-cancel>キャンセル</button>`;
+ document.body.append(dialog);const canvases=[...dialog.querySelectorAll('canvas')];let images=[],points=[[],[]],regions=[],drag=null,lastSide=0;
+ function draw(){canvases.forEach((canvas,side)=>{const c=canvas.getContext('2d'),r=regions[side],im=images[side];c.clearRect(0,0,400,400);if(!im)return;c.drawImage(im,r[0]*im.width,r[1]*im.height,r[2]*im.width,r[3]*im.height,0,0,400,400);points[side].forEach(([x,y],i)=>{x=(x-r[0])/r[2]*400;y=(y-r[1])/r[3]*400;c.fillStyle='#ffce69';c.beginPath();c.arc(x,y,6,0,Math.PI*2);c.fill();c.fillStyle='white';c.font='bold 16px sans-serif';c.fillText(String(i+1),x+9,y-8);});});dialog.querySelector('[data-status]').textContent=`元 ${points[0].length}点 ／ 見本 ${points[1].length}点`;dialog.querySelector('[data-apply]').disabled=points[0].length<3||points[0].length!==points[1].length;}
+ canvases.forEach((canvas,side)=>{
+  function position(e){const r=canvas.getBoundingClientRect();return pointFromCanvas(Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(e.clientY-r.top)/r.height)),regions[side]);}
+  canvas.onpointerdown=e=>{lastSide=side;const p=position(e),r=regions[side];let i=points[side].findIndex(q=>Math.hypot((q[0]-p[0])/r[2],(q[1]-p[1])/r[3])<.04);if(i<0){if(points[side].length>=512)return;i=points[side].length;points[side].push(p);}drag={side,index:i};canvas.setPointerCapture(e.pointerId);draw();};
+  canvas.onpointermove=e=>{if(drag?.side===side){points[side][drag.index]=position(e);draw();}};canvas.onpointerup=canvas.onpointercancel=()=>{drag=null;};
+ });
+ dialog.querySelector('[data-copy]').onclick=()=>{points[1]=points[0].map(p=>[...p]);draw();};dialog.querySelector('[data-undo]').onclick=()=>{points[lastSide].pop();draw();};dialog.querySelector('[data-clear]').onclick=()=>{points=[[],[]];draw();};dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-apply]').onclick=()=>{onApply(points);dialog.close();};
+ return {open(initial){const items=getItems();if(items.some(x=>!x))throw Error('元パーツと見本を選んでください');images=items.map(x=>renderer.image(x.image));if(images.some(x=>!x))throw Error('画像の読み込みを待ってください');points=initial.map(a=>a.map(p=>[...p]));regions=images.map(im=>{
+  const c=document.createElement('canvas');c.width=c.height=256;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(im,0,0,256,256);const a=ctx.getImageData(0,0,256,256).data;let l=256,t=256,r=0,b=0;
+  for(let y=0;y<256;y++)for(let x=0;x<256;x++)if(a[(y*256+x)*4+3]>32){l=Math.min(l,x);t=Math.min(t,y);r=Math.max(r,x+1);b=Math.max(b,y+1);}
+  if(l>=r)return [0,0,1,1];const size=Math.min(1,Math.max(r-l,b-t)/256*1.3+.02),x=Math.max(0,Math.min(1-size,(l+r)/512-size/2)),y=Math.max(0,Math.min(1-size,(t+b)/512-size/2));return [x,y,size,size];
+ });draw();dialog.showModal();}};
+}

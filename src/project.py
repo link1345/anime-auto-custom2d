@@ -74,6 +74,12 @@ def validate(project):
             for value in vertex:number(value,-1,2)
         for triangle in mesh["triangles"]:
             if len(triangle)!=3 or any(type(i) is not int or not 0<=i<len(mesh["vertices"]) for i in triangle):raise ValueError("Invalid triangle")
+    for source in project.get('expressionSources',[]):
+        safe_id(source['id']);asset(source['image']);asset(source['original'])
+        from .segmentation import rectangle
+        rectangle(source['rect'])
+        from scripts.run_face_job import FACE_TAGS
+        if not source.get('tags') or any(t not in FACE_TAGS for t in source['tags']):raise ValueError('Invalid expression tags')
     for expression in project.get("expressions", []):
         asset(expression["image"])
         if len(expression["rect"])!=4:raise ValueError("Invalid expression rectangle")
@@ -261,6 +267,7 @@ class Store:
         required = {project["source"]}
         required.update(p["image"] for p in project["parts"])
         required.update(e["image"] for e in project.get("expressions", []))
+        for e in project.get('expressionSources',[]):required.update([e['image'],e['original']])
         required.update(e["image"] for e in project.get("faceEffects", []) if e.get("image"))
         if project.get("depth"):required.add(project["depth"]["image"])
         required.update(project.get('depth',{}).get('arrays',{}).values())

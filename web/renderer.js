@@ -1,5 +1,14 @@
-import {boneMatrices,deformedVertices,texturedMesh,partUV,headMatrix,isHeadPart,surfaceMesh,directionalMesh,multiviewMesh} from './deformation.js?v=perfgrid1';
-import {defaults,follow,attachedPoint,attachmentMesh,createLightingDelta,balancedLighting,irisOffset,faceDepth} from './parent-motion.js?v=perfgrid1';
+import {blinkMaskGeometry,morphTextureWeight,expressionMatchesPart,drivenExpression,boneMatrices,deformedVertices,texturedMesh,partUV,headMatrix,isHeadPart,surfaceMesh,directionalMesh,multiviewMesh} from './deformation.js?v=morphpin1';
+import {defaults,follow,attachedPoint,attachmentMesh,createLightingDelta,balancedLighting,irisOffset,faceDepth} from './parent-motion.js?v=morphpin1';
+// A fitted target replaces the source texture instead of being painted over it.
+export function drawMorphTextures(ctx,base,target,strength,draw){
+ const t=target?Math.max(0,Math.min(1,strength||0)):0,alpha=ctx.globalAlpha;
+ ctx.save();
+ try{
+  if(t<1){ctx.globalAlpha=alpha*(1-t);draw(base,false);}
+  if(t>0){ctx.globalAlpha=alpha*t;draw(target,true);}
+ }finally{ctx.restore();}
+}
 export class Renderer {
   constructor(canvas) {
     this.canvas=canvas; this.ctx=canvas.getContext('2d'); this.images=new Map();
@@ -41,6 +50,7 @@ export class Renderer {
     if(!p||!frame)return;
     const l=this.layout(), v={...frame.values};
     if(this.eyePreview!==undefined)v.eyeOpen=this.eyePreview;
+    if(this.mouthPreview!==undefined)v.mouthOpen=this.mouthPreview;
     if(this.directionPreview!==undefined)v.headX=this.directionPreview;
     ctx.save(); ctx.translate(l.x,l.y); ctx.scale(l.w,l.h);
     const source=this.image(p.source);
@@ -57,7 +67,9 @@ export class Renderer {
     for(const part of [...p.parts].sort((a,b)=>a.depth-b.depth)) {
       if(part.visible===false||(p.display?.templatesVisible===false&&part.provenance==='template'))continue;
       let image=this.image(part.image); if(!image)continue;
-      if(p.eyeMask&&part.scope==='face'&&['irides','eyewhite','eyelash'].includes(part.tag))image=this.maskEyeLayer(image,part.tag,v.eyeOpen,v);
+      const driven=drivenExpression(p,part,{...frame,values:v});
+      const partFrame=driven?{...frame,expressionId:driven.expression.id,strength:driven.strength}:frame;
+      if(!(driven&&part.tag==='eyelash')&&p.eyeMask&&part.scope==='face'&&['irides','eyewhite','eyelash'].includes(part.tag))image=this.maskEyeLayer(image,part.tag,v.eyeOpen,v);
       if(parent)surface=isHeadPart(part)?attachedSurface(part):null;
       const output=ctx,shared=surface&&isHeadPart(part);
       if(shared)ctx=beginSurface();
@@ -70,13 +82,14 @@ export class Renderer {
       if(!p.eyeMask&&part.scope==='face'&&['irides','eyewhite','eyelash'].includes(part.tag)){
         ctx.beginPath();for(const [x,y] of [p.face.leftEye,p.face.rightEye]){ctx.moveTo(x+.05,y);ctx.ellipse(x,y,.05,.035*Math.max(.001,v.eyeOpen),0,0,Math.PI*2);}ctx.clip();
       }
-      const fitted=p.expressions.find(e=>e.id===frame.expressionId&&!e.stale&&e.fit?.partId===part.id);
+      const fitted=p.expressions.find(e=>e.id===partFrame.expressionId&&!e.stale&&e.fit?.partId===part.id&&expressionMatchesPart(e,part));
       const deform=isHeadPart(part)||!!matrices||!!fitted||part.mesh.source==='moge3';
-      let vertices=deform?deformedVertices(part,p,frame,matrices):part.mesh.vertices;
+      let vertices=deform?deformedVertices(part,p,partFrame,matrices):part.mesh.vertices;
       if(parent&&!isHeadPart(part))vertices=vertices.map((q,i)=>attachedPoint(p,part,q,v,this.bodyState,part.mesh.vertices[i]));
       if(deform||parent){
-        texturedMesh(ctx,image,vertices,part.mesh.triangles,partUV(part));
-        if(fitted&&frame.strength>0){ctx.save();ctx.globalAlpha=frame.strength;texturedMesh(ctx,this.image(fitted.image),vertices,part.mesh.triangles,fitted.fit.uv);ctx.restore();}
+        const targetImage=fitted?this.image(fitted.image):null;
+        if(targetImage&&partFrame.strength>0)drawMorphTextures(ctx,image,targetImage,morphTextureWeight(fitted,partFrame.strength),(texture,isTarget)=>texturedMesh(ctx,texture,vertices,part.mesh.triangles,isTarget?fitted.fit.uv:partUV(part)));
+        else texturedMesh(ctx,image,vertices,part.mesh.triangles,partUV(part));
       }else ctx.drawImage(image,...(part.rect||[0,0,1,1]));
       if(this.mesh&&!shared) {
         ctx.strokeStyle='#9be4da88';ctx.lineWidth=.0008;
@@ -203,11 +216,11 @@ export class Renderer {
 
   maskEyeLayer(image,tag,open,values=this.frame?.values??{}){
     const m=this.project.eyeMask,mask=this.image(m.image);if(!mask||!image)return image;
-    open=Math.max(0,Math.min(1,Math.round(open*30)/30));const scale=m.scale??1;
+    open=Math.max(0,Math.min(1,open));const blink=tag!=='eyelash'?blinkMaskGeometry(this.project,open):null;const scale=m.scale??1;
     this.eyeCache??=new Map();const key=this.url(m.image)+':'+tag+':'+image.src;
     const settings={...defaults,...this.project.parentMotion};
     const gazeKey=tag==='irides'?JSON.stringify(m.eyes.map(eye=>irisOffset(eye,settings,values).map(x=>Math.round(x*mask.width)))):tag==='eyewhite'?String(settings.gazeEnabled):'';
-    const cached=this.eyeCache.get(key);if(cached?.open===open&&cached.scale===scale&&cached.source===image&&cached.gazeKey===gazeKey)return cached.canvas;
+    const cached=this.eyeCache.get(key);if(cached?.open===open&&cached.scale===scale&&cached.source===image&&cached.gazeKey===gazeKey&&cached.blink===blink?.expression)return cached.canvas;
     const raw=document.createElement('canvas');raw.width=mask.width;raw.height=mask.height;
     const c=raw.getContext('2d'),w=raw.width,h=raw.height;
     if(tag==='eyelash'){
@@ -223,12 +236,21 @@ export class Renderer {
         if(settings.gazeEnabled){c.drawImage(mask,0,0,w,h);c.globalCompositeOperation='source-in';c.fillStyle='#fff8f3';c.fillRect(0,0,w,h);c.globalCompositeOperation='source-over';}
         c.drawImage(image,0,0,w,h);
       }
-      c.globalCompositeOperation='destination-in';c.drawImage(mask,0,0);
-      // Apply a second mask as a rectangle path. At zero openness this clears
-      // both eyes completely, while the underlying skin remains visible.
-      c.beginPath();
-      for(const eye of m.eyes){const [l,t,r,b]=eye.bbox,mid=(t+b)/2;c.rect(l*w,(mid-(b-t)*open/2)*h,(r-l)*w,(b-t)*open*h);}
-      c.fill();
+      c.globalCompositeOperation='destination-in';
+      if(blink){
+        this.blinkMaskCache??={};let aperture=this.blinkMaskCache;
+        if(aperture.open!==open||aperture.expression!==blink.expression||aperture.mask!==mask){
+          const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+          const a=canvas.getContext('2d');a.scale(w,h);
+          if(open>0)texturedMesh(a,mask,blink.vertices,blink.triangles,blink.uv);
+          aperture=this.blinkMaskCache={open,expression:blink.expression,mask,canvas};
+        }
+        c.drawImage(aperture.canvas,0,0);
+      }else{
+        c.drawImage(mask,0,0);c.beginPath();
+        for(const eye of m.eyes){const [l,t,r,b]=eye.bbox,mid=(t+b)/2;c.rect(l*w,(mid-(b-t)*open/2)*h,(r-l)*w,(b-t)*open*h);}
+        c.fill();
+      }
     }
     const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;const out=canvas.getContext('2d');
     for(let i=0;i<2;i++){
@@ -237,7 +259,7 @@ export class Renderer {
       out.drawImage(raw,i*w/2,0,w/2,h,i*w/2,0,w/2,h);out.restore();
     }
     if(this.eyeCache.size>64)this.eyeCache.clear();
-    this.eyeCache.set(key,{open,scale,source:image,canvas,gazeKey});return canvas;
+    this.eyeCache.set(key,{open,scale,source:image,canvas,gazeKey,blink:blink?.expression});return canvas;
   }
 
   drawEffects(ctx,project,frame){

@@ -1,4 +1,4 @@
-import {defaults} from './parent-motion.js?v=perfgrid1';
+import {defaults} from './parent-motion.js?v=morphpin1';
 export function createParentUI({api,json,action,load,getProject,toast}){
  const box=document.createElement('section');box.innerHTML=`<div class="section-title">親子追従・形を保つ変形</div><label class="check"><input id="parentEnabled" type="checkbox">親子追従モードを使う</label><p class="hint">有効時は旧MoGe3・斜め顔変形に優先。目の取り付け位置は追従し、形の潰れ方だけを調整します。髪は頭に固定し、独立して揺れます。</p>`;
  box.insertAdjacentHTML('beforeend','<label>投影方式<select id="parentCamera"><option value="2">平行投影</option><option value="1">透視投影</option><option value="0">従来の2D変形</option></select></label><label>カーソル方式<select id="parentCursor"><option value="0">2Dカーソル</option><option value="1">3Dカーソル</option></select></label><p class="hint">投影方式とカーソル方式は独立。3Dカーソルは顔の中心から離すほど奥へ移動します。頭の手前で止まり、背後には回りません。平行投影では遠近による拡大縮小はありません。変更後は設定を保存してください。従来の2D変形も残しています。</p>');

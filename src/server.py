@@ -16,6 +16,7 @@ from .pipeline import create_project, generate_parts, image_from_bytes, validate
 from .project import Store, uid, safe_id, merge_generated
 from .runtime import Runtime
 from .media import upscale_face
+from .expression_registry import upsert_named
 from .segmentation import make_job, import_result as import_segmentation_result, rectangle, split_part, split_islands
 from .colab import notebook
 from . import compute, character
@@ -232,11 +233,30 @@ async def expressions(request):
     rect = [finite(x, 0, 1) for x in rect]
     if rect[2] <= 0 or rect[3] <= 0 or rect[0]+rect[2] > 1 or rect[1]+rect[3] > 1:
         raise ValueError("Rectangle must fit the image")
-    project["expressions"].append({"id": eid, "name": str(data.get("name", "表情"))[:80],
+    upsert_named(project,"expressions",{"id": eid, "name": str(data.get("name", "表情"))[:80],
         "target": role, "image": path, "source": "user", "status": "adopted",
         "meshVersion": project["meshVersion"], "rect": rect,
         "method": "crossfade", "alignment": "manual", "stale": False})
     return await commit(request, project)
+
+
+async def expression_source(request):
+    project=copy.deepcopy(active(request));data=await request.post();folder=request.app['store'].folder(project['id'])
+    image=image_from_bytes(data['image'].file.read());original=f'assets/expression-original-{uid()}.png';image.save(folder/original)
+    path=original;scaling=None
+    if data.get('upscale')=='true':
+        path=f'assets/expression-face-{uid()}.png'
+        scaling=await asyncio.to_thread(upscale_face,folder/original,folder/path,2160)
+        image=Image.open(folder/path).convert('RGBA')
+    metadata=validate_face_image(image,True)
+    if scaling:metadata.update(scaling)
+    from scripts.run_face_job import FACE_TAGS
+    tags=json.loads(data.get('tags','[]'))
+    if not isinstance(tags,list) or not tags or any(t not in FACE_TAGS for t in tags) or len(tags)!=len(set(tags)):raise ValueError('抽出部品を選択してください')
+    rect=rectangle(json.loads(data.get('rect','[0,0,1,1]')))
+    upsert_named(project,'expressionSources',{'id':uid(),'name':str(data.get('name','表情'))[:80],'image':path,'original':original,'rect':rect,'tags':tags,'validation':metadata})
+    if active(request)['revision']!=project['revision'] or active(request)['id']!=project['id']:raise ValueError('Project changed')
+    return await commit(request,project)
 
 
 async def face_input(request):
@@ -263,7 +283,7 @@ async def face_input(request):
 
 async def face_job(request):
     scope=request.query.get("scope","face")
-    _,payload=make_job(request.app["store"],active(request),scope)
+    _,payload=make_job(request.app["store"],active(request),scope,expression_id=request.query.get("expression"))
     return web.Response(body=payload,content_type="application/zip",headers={"Content-Disposition":f'attachment; filename="see-through-{scope}-job.zip"'})
 
 
@@ -474,7 +494,19 @@ async def character_edit(request):
     elif operation=='joint':updated=character.manual_joint(p,data['name'],data['position'])
     elif operation=='rig':updated=character.build_rig(p)
     elif operation=='split-arm':updated=character.split_arm(store,p,data['partId'],data['side'])
-    elif operation=='fit-expression':updated=character.fit_expression(store,p,data['expressionId'],data['partId'],data.get('basePoints'),data.get('targetPoints'))
+    elif operation=='bind-expression':
+        updated=copy.deepcopy(p);e=next(e for e in updated['expressions'] if e['id']==data['expressionId'])
+        if not e.get('fit') or e.get('stale'):raise ValueError('先に対象パーツへフィットしてください')
+        channel=data.get('channel')
+        if channel not in ('blink','mouth',None):raise ValueError('Invalid morph channel')
+        part=next(x for x in updated['parts'] if x['id']==e['fit']['partId'])
+        if channel and not character.expression_matches_part(e,part):raise ValueError('見本と対象パーツの種類が一致しません。再フィットしてください')
+        if channel=='blink' and part.get('tag')!='eyelash':raise ValueError('まばたきはまつげパーツに割り当ててください')
+        if channel=='mouth' and part.get('tag')!='mouth':raise ValueError('口パクは口パーツに割り当ててください')
+        for other in updated['expressions']:
+            if other.get('fit',{}).get('partId')==part['id'] and other.get('driver')==channel:other.pop('driver',None)
+        e['driver']=channel
+    elif operation=='fit-expression':updated=character.fit_expression(store,p,data['expressionId'],data['partId'],data.get('basePoints'),data.get('targetPoints'),data.get('useFaceAlignment',False))
     elif operation=='head-surface':updated=character.build_head_surface(store,p)
     elif operation=='head-surface-settings':
         if not p.get('headSurface'):raise ValueError('先に共通立体顔面を構築してください')
@@ -584,7 +616,7 @@ def create_app(data=None, port=8765):
         web.patch("/api/parts/{id}", edit_part), web.post("/api/parts/{id}/image", replace_image),
         web.post("/api/regenerate", regenerate), web.post("/api/adopt", adopt),
         web.post("/api/history/{direction}", history), web.post("/api/expressions", expressions),
-        web.post("/api/face", face_input), web.get("/api/face-job", face_job),
+        web.post("/api/expression-source",expression_source),web.post("/api/face", face_input), web.get("/api/face-job", face_job),
         web.patch("/api/face/alignment",face_alignment),web.get("/api/colab",colab_download),
         web.post("/api/segmentation/result",segmentation_import),web.get("/api/segmentation/candidates",segmentation_candidates),
         web.post("/api/parts/{id}/split",split_layer),web.post("/api/face/effects",face_effect),

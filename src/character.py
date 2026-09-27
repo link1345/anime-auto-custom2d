@@ -140,21 +140,107 @@ def contour(image,count=48):
 
 def displacement(vertices,source,target):
     vertices=np.asarray(vertices);source=check_points(source);target=check_points(target,len(source))
-    d=((vertices[:,None,:2]-source[None,:,:])**2).sum(axis=2)
-    weights=1/np.maximum(d,1e-12)**2;weights/=weights.sum(axis=1,keepdims=True)
-    return weights@(target-source)
+    # Interpolating thin-plate spline keeps the pins exact without IDW's local bumps.
+    def kernel(x,y):
+        r2=((x[:,None,:2]-y[None,:,:2])**2).sum(axis=2)
+        return r2*np.log(np.maximum(r2,1e-20))
+    n=len(source);P=np.column_stack([np.ones(n),source])
+    system=np.block([[kernel(source,source),P],[P.T,np.zeros((3,3))]])
+    try:weights=np.linalg.solve(system,np.vstack([target-source,np.zeros((3,2))]))
+    except np.linalg.LinAlgError:raise ValueError('対応点が重複、または一直線上に並んでいます')
+    return np.column_stack([kernel(vertices,source),np.ones(len(vertices)),vertices[:,:2]])@weights
 
 
-def fit_expression(store,project,expression_id,part_id,base_points=None,target_points=None):
+def insert_control_vertices(project,part,points):
+    """Split containing triangles, retaining depth, skinning and existing morph UVs."""
+    mesh=part['mesh']
+    for point in points:
+        vertices=np.asarray(mesh['vertices'])
+        if np.min(np.linalg.norm(vertices[:,:2]-point,axis=1))<1e-9:continue
+        hits=[]
+        for tri in mesh['triangles']:
+            a=vertices[tri,:2]
+            w=np.linalg.solve(np.vstack([a.T,np.ones(3)]),[*point,1])
+            if min(w)>=-1e-9:hits.append((tri,w))
+        if not hits:continue  # Legacy controls outside the textured mesh have no pixel to pin.
+        tri,w=hits[0];index=len(vertices)
+        vertex=w@vertices[tri];vertex[:2]=point;mesh['vertices'].append(vertex.tolist())
+        for values in mesh.get('morphs',{}).values():values.append((w@np.asarray(values)[tri]).tolist())
+        for expr in project['expressions']:
+            fit=expr.get('fit',{})
+            if fit.get('partId')==part['id']:fit['uv'].append((w@np.asarray(fit['uv'])[tri]).tolist())
+        if 'weights' in mesh:
+            influences={}
+            for i,weight in zip(tri,w):
+                for joint,value in zip(mesh['joints'][i],mesh['weights'][i]):influences[joint]=influences.get(joint,0)+max(0,float(weight))*value
+            best=sorted(influences.items(),key=lambda x:-x[1])[:4]
+            best+= [(0,0)]*(4-len(best));total=sum(v for _,v in best)
+            mesh['joints'].append([j for j,_ in best]);mesh['weights'].append([v/total for _,v in best])
+        for tri,w in hits:
+            mesh['triangles'].remove(tri)
+            for k in range(3):
+                # The opposite barycentric coordinate is zero on an existing edge.
+                if w[(k+2)%3]>1e-9:mesh['triangles'].append([tri[k],tri[(k+1)%3],index])
+
+
+    # Lawson edge flips remove skinny triangles introduced by point insertion.
+    xy=np.asarray(mesh['vertices'])[:,:2]
+    def cross(a,b):return a[0]*b[1]-a[1]*b[0]
+    for _ in range(10000):
+        edges={};changed=False
+        for ti,tri in enumerate(mesh['triangles']):
+            for k in range(3):edges.setdefault(tuple(sorted((tri[k],tri[(k+1)%3]))),[]).append((ti,tri[(k+2)%3]))
+        for (a,b),adj in edges.items():
+            if len(adj)!=2:continue
+            (i,c),(j,d)=adj
+            if cross(xy[d]-xy[c],xy[a]-xy[c])*cross(xy[d]-xy[c],xy[b]-xy[c])>=-1e-16:continue
+            q=xy[[a,b,c]]-xy[d];det=np.linalg.det(np.column_stack([q,(q*q).sum(axis=1)]))
+            if det*cross(xy[b]-xy[a],xy[c]-xy[a])<=1e-16:continue
+            orientation=cross(xy[mesh['triangles'][i][1]]-xy[mesh['triangles'][i][0]],xy[mesh['triangles'][i][2]]-xy[mesh['triangles'][i][0]])
+            for index,tri in [(i,[c,d,a]),(j,[d,c,b])]:
+                if cross(xy[tri[1]]-xy[tri[0]],xy[tri[2]]-xy[tri[0]])*orientation<0:tri.reverse()
+                mesh['triangles'][index]=tri
+            changed=True;break
+        if not changed:break
+
+
+def expression_matches_part(expr,part):
+    tag=part.get('tag');target=expr.get('target')
+    if expr.get('tag'):return expr['tag']==tag
+    if target=='mouth':return tag=='mouth'
+    if target=='eyes':return tag in ('eyelash','eyewhite','irides')
+    if target=='brows':return tag=='eyebrow'
+    return True
+
+
+def fit_expression(store,project,expression_id,part_id,base_points=None,target_points=None,use_face_alignment=False):
     p=copy.deepcopy(project);part=next(x for x in p['parts'] if x['id']==part_id);expr=next(e for e in p['expressions'] if e['id']==expression_id)
+    if not expression_matches_part(expr,part):raise ValueError('見本の種類と元パーツが一致しません。目には目、口には口の見本を選んでください')
+    for other in p['parts']:other.get('mesh',{}).get('morphs',{}).pop(expression_id,None)
+    expr.pop('driver',None)
     folder=store.folder(p['id'])
     with Image.open(folder/part['image']) as im:base=im.convert('RGBA')
     with Image.open(folder/expr['image']) as im:target=im.convert('RGBA')
-    method='manual' if base_points is not None else 'alpha-contour-idw'
+    if (base_points is None)!=(target_points is None):raise ValueError('元と見本の対応点を両方指定してください')
+    if use_face_alignment:
+        rect=p.get('faceInput',{}).get('alignment',{}).get('rect')
+        if not rect:raise ValueError('先に顔の位置合わせを登録してください')
+        expr['rect']=list(rect)
+    method='manual-pinned' if base_points is not None else 'alpha-contour-pinned'
     base_points=base_points if base_points is not None else contour(base)
     target_points=target_points if target_points is not None else contour(target)
     source=check_points(base_points);dest=check_points(target_points,len(source));r=part.get('rect',[0,0,1,1]);er=expr['rect']
     source=source*np.array(r[2:])+r[:2];dest=dest*np.array(er[2:])+er[:2]
+    unique=[];targets=[]
+    for a,b in zip(source,dest):
+        matches=[i for i,q in enumerate(unique) if np.linalg.norm(a-q)<1e-9]
+        if matches:
+            i=matches[0]
+            if base_points is not None and method=='manual-pinned' and np.linalg.norm(targets[i]-b)>1e-9:raise ValueError('同じ元の対応点に異なる変形先を指定できません')
+            continue
+        unique.append(a);targets.append(b)
+    source=np.asarray(unique);dest=np.asarray(targets)
+    insert_control_vertices(p,part,source)
     vertices=np.asarray(part['mesh']['vertices']);delta=displacement(vertices,source,dest)
     target_vertices=vertices.copy();target_vertices[:,:2]+=delta
     # Reject folded triangles instead of silently creating inverted faces.

@@ -49,6 +49,19 @@ class SegmentationTests(unittest.TestCase):
         meta=package_result(loaded,image,padded.width,offset,layers,resultfile,{'fixture':True})
         return job,resultfile.read_bytes(),meta
 
+    def test_expression_extraction_is_separate_and_filtered(self):
+        from src.project import uid
+        sid=uid();self.project['expressionSources']=[{'id':sid,'name':'blink','image':'assets/face.png','original':'assets/face.png','validation':self.project['faceInput']['validation'],'rect':[.2,.1,.4,.4],'tags':['eyelash']}]
+        job,payload=make_job(self.store,self.project,'face',expression_id=sid)
+        self.assertEqual(job['allowedTags'],['eyelash'])
+        path=self.root/'expression.zip';path.write_bytes(payload);loaded,image=read_job(path);padded,offset=prepare_input(image,'face')
+        layers=self.root/'expression-layers';layers.mkdir();Image.new('RGBA',padded.size,'red').save(layers/'eyelash.png');Image.new('RGBA',padded.size,'red').save(layers/'mouth.png')
+        result=self.root/'expression-result.zip';meta=package_result(loaded,image,padded.width,offset,layers,result,{'fixture':True})
+        self.assertEqual([x['tag'] for x in meta['layers']],['eyelash'])
+        c=import_result(self.store,self.project,result.read_bytes())
+        self.assertEqual(c['project']['parts'],self.project['parts']);self.assertEqual(c['project']['faceInput'],self.project['faceInput'])
+        e=c['project']['expressions'][-1];self.assertEqual(e['sourceId'],sid);self.assertEqual(e['rect'],[.2,.1,.4,.4])
+
     def test_face_exports_only_eight_requested_tags(self):
         job,payload,meta=self.result(extra=True)
         self.assertEqual(set(x['tag'] for x in meta['layers']),set(FACE_TAGS))

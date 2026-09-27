@@ -142,4 +142,19 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         async with self.client.get(self.base+'/api/character.glb') as r:self.assertEqual(r.status,400)
 
 
+
+
+    async def test_named_expression_source_overwrite_and_undo(self):
+        async def upload(name,color):
+            raw=io.BytesIO();Image.new('RGBA',(2160,2160),color).save(raw,'PNG')
+            form=FormData();form.add_field('image',raw.getvalue(),filename='face.png',content_type='image/png');form.add_field('name',name);form.add_field('tags','["mouth"]')
+            async with self.client.post(self.base+'/api/expression-source',data=form) as r:
+                self.assertEqual(r.status,200);return await r.json()
+        first=await upload('test','red');old=first['expressionSources'][-1]
+        second=await upload(' test ','blue');new=second['expressionSources'][-1]
+        self.assertEqual(len(second['expressionSources']),1);self.assertEqual(old['id'],new['id']);self.assertNotEqual(old['image'],new['image'])
+        async with self.client.post(self.base+'/api/history/undo') as r:
+            self.assertEqual((await r.json())['expressionSources'][-1]['image'],old['image'])
+
+
 if __name__=='__main__':unittest.main()

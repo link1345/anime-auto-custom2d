@@ -66,6 +66,7 @@ def read_job(path):
 def package_result(job, image, padded_size, offset, layer_dir, result_path, execution):
     """Whitelist output and map padded model coordinates back to source pixels."""
     tags=FACE_TAGS if job["scope"]=="face" else BODY_TAGS
+    tags={k:v for k,v in tags.items() if k in job.get('allowedTags',tags)}
     result={"schemaVersion":1,"jobId":job["id"],"projectId":job["projectId"],
             "inputSha256":job["inputSha256"],"scope":job["scope"],"status":"success",
             "backend":"see-through","sourceSize":list(image.size),"inferenceResolution":padded_size,

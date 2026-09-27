@@ -21,6 +21,17 @@ export function createSegmentationUI({api,json,action,toast,load,renderer,getPro
     <label class="check"><input id="templatesVisible" type="checkbox" checked>元の仮パーツを表示</label>
     <button id="restoreCandidate" class="wide">未採用の結果候補を再表示</button>`;
   document.querySelector('.left').append(facePanel);
+  const expressions=document.createElement('section');expressions.innerHTML=`<div class="section-title">表情別の顔・部品抽出</div><label>表情名<input id="expressionSourceName" value="閉じ目"></label><label>顔の正方形画像<input id="expressionSourceFile" type="file" accept="image/png,image/jpeg,image/webp"></label><label class="check"><input id="expressionUpscale" type="checkbox" checked>FFmpegで2160pxへ拡大</label><p class="hint">顔が大きく入った正方形を使用。チェックを外す場合は2160px以上が必要です。同じ表情名は上書きします。元の顔・パーツは置換しません。</p><label>表情顔の配置 x,y,幅,高さ<input id="expressionSourceRect" placeholder="空欄なら正面顔と同じ配置"></label><div id="expressionTags"></div><button id="saveExpressionSource">表情の顔を登録</button><label>登録した顔<select id="expressionSourceList"></select></label><a id="expressionJob" class="button wide">選択部品のColabジョブ ZIP ↓</a><p class="hint">上のColabノートブックで実行し、See-through結果ZIPを読み込んで採用。抽出結果は表情ライブラリへ追加されます。抽出対象を絞ってもモデル本体は全レイヤーを推論します。</p>`;
+  document.querySelector('.left').append(expressions);
+  for(const [tag,name] of Object.entries({eyebrow:'眉毛',eyelash:'まつげ',mouth:'口',nose:'鼻',face:'肌',ears:'耳',irides:'瞳',eyewhite:'白目'})){
+    const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=tag;input.checked=['eyelash','mouth'].includes(tag);label.append(input,name);$('expressionTags').append(label);
+  }
+  $('saveExpressionSource').onclick=()=>action(async()=>{
+    const file=$('expressionSourceFile').files[0];if(!file)throw Error('顔画像を選んでください');
+    const data=new FormData();data.set('image',file);data.set('name',$('expressionSourceName').value);data.set('upscale',String($('expressionUpscale').checked));data.set('rect',JSON.stringify($('expressionSourceRect').value.trim()?$('expressionSourceRect').value.split(',').map(Number):(getProject().faceInput?.alignment?.rect??[0,0,1,1])));data.set('tags',JSON.stringify([...$('expressionTags').querySelectorAll('input:checked')].map(x=>x.value)));
+    await api('expression-source',{method:'POST',body:data});await load();toast('表情顔を登録しました');
+  });
+  $('expressionSourceList').onchange=()=>{$('expressionJob').href='/api/face-job?scope=face&expression='+encodeURIComponent($('expressionSourceList').value);};
   const splitPanel=document.createElement('section');splitPanel.innerHTML=`<div class="section-title">レイヤー・細分化</div>
     <label class="check"><input type="checkbox" id="partVisible" checked>このパーツを表示</label>
     <label>動く部位<select id="partRole"><option value="head">頭</option><option value="neck">首</option><option value="chest">胸</option><option value="armLeft">右腕（画面左）</option><option value="armRight">左腕（画面右）</option><option value="forearmLeft">前腕・画面左</option><option value="forearmRight">前腕・画面右</option><option value="handLeft">手・画面左</option><option value="handRight">手・画面右</option><option value="skirt">スカート</option><option value="legs">足</option><option value="feet">靴</option><option value="hairFront">前髪</option><option value="hairBack">後ろ髪</option><option value="hairLeft">横髪・右</option><option value="hairRight">横髪・左</option></select></label>
@@ -49,7 +60,7 @@ export function createSegmentationUI({api,json,action,toast,load,renderer,getPro
   for(const [id,kind]of [['addBlush','blush'],['addStar','star'],['addHeart','heart']])$(id).onclick=()=>action(async()=>{await api('face/effects',json('POST',{kind}));await load();});
   $('addFaceImage').onclick=()=>$('effectDialog').showModal();$('closeEffect').onclick=()=>$('effectDialog').close();
   $('effectForm').onsubmit=event=>{event.preventDefault();action(async()=>{const form=new FormData(event.target);form.set('rect',JSON.stringify(String(form.get('rect')).split(',').map(Number)));await api('face/effect-image',{method:'POST',body:form});$('effectDialog').close();await load();});};
-  return {render(){
+  return {render(){const sources=getProject().expressionSources||[];$('expressionSourceList').replaceChildren(...sources.map(e=>new Option(e.name,e.id)));$('expressionJob').hidden=!sources.length;$('expressionSourceList').onchange();
     const project=getProject(),part=project.parts.find(p=>p.id===getSelected());
     if(!part)return;
     $('partVisible').checked=part.visible!==false;$('partVisible').disabled=part.locked;
